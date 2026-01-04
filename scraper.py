@@ -1,4 +1,5 @@
 from playwright.sync_api import sync_playwright
+import re
 
 def scrape_standings(url):
     with sync_playwright() as p:
@@ -18,24 +19,23 @@ def scrape_standings(url):
 
         page.goto(url, timeout=60000)
 
-        # Ensure football UI is loaded
+        # Ensure football UI loads
         page.wait_for_selector('a[href*="/football/"]', timeout=60000)
         page.wait_for_timeout(6000)
 
-        # Find team links (standings rows contain these)
         team_links = page.query_selector_all('a[href*="/team/"]')
 
         rows = []
 
         for link in team_links:
             try:
-                # Walk up DOM to row container
-                row = link.evaluate_handle(
-                    "el => el.closest('div')"
-                )
+                row = link.evaluate_handle("el => el.closest('div')")
                 text = row.inner_text().strip()
-                if text and len(text) > 10:
+
+                # ✅ KEEP ONLY ROWS THAT LOOK LIKE STANDINGS
+                if re.search(r"\d", text) and len(text) > 15:
                     rows.append(text)
+
             except:
                 continue
 
