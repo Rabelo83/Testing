@@ -5,7 +5,6 @@ import requests
 API_KEY = os.getenv("ALLSPORTS_API_KEY")
 BASE_URL = "https://apiv2.allsportsapi.com/football"
 
-# Cache (league + season)
 CACHE = {}
 CACHE_TTL = 300  # 5 minutes
 
@@ -20,6 +19,7 @@ LEAGUES = {
     }
 }
 
+
 def get_league_id(country_id, league_name):
     params = {
         "met": "Leagues",
@@ -27,19 +27,18 @@ def get_league_id(country_id, league_name):
         "APIkey": API_KEY
     }
 
-    res = requests.get(BASE_URL, params=params, timeout=20)
-    res.raise_for_status()
+    response = requests.get(BASE_URL, params=params, timeout=20)
+    response.raise_for_status()
 
-    leagues = res.json().get("result", [])
+    leagues = response.json().get("result", [])
 
-    # 🔒 STRICT MATCH (prevents wrong league)
     for league in leagues:
-        if league["league_name"].strip().lower() == league_name.lower():
-            return league["league_key"]
+        if league.get("league_name", "").strip().lower() == league_name.lower():
+            return league.get("league_key")
 
-    # 🔍 Fallback: show what was available (debug help)
-    available = [l["league_name"] for l in leagues]
+    available = [l.get("league_name") for l in leagues]
     raise ValueError(f"Exact league not found. Available: {available}")
+
 
 def get_standings(league_key, season=None):
     if league_key not in LEAGUES:
@@ -64,28 +63,23 @@ def get_standings(league_key, season=None):
     if season != "current":
         params["season"] = season
 
-    res = requests.get(BASE_URL, params=params, timeout=20)
-    res.raise_for_status()
+    response = requests.get(BASE_URL, params=params, timeout=20)
+    response.raise_for_status()
 
-    payload = res.json()
-
-    # 🔒 SAFETY CHECKS
-    if "result" not in payload or not payload["result"]:
-        raise ValueError("No standings data returned")
-
+    payload = response.json()
     results = payload.get("result", [])
 
-if not results:
-    raise ValueError("No standings returned by API")
+    if not results:
+        raise ValueError("No standings returned by API")
 
-standings_block = results[0]
+    standings_block = results[0]
+    teams = standings_block.get("standings", [])
 
-    if "standings" not in standings_block:
-        raise ValueError("Standings field missing in API response")
-
-    teams = standings_block["standings"]
+    if not teams:
+        raise ValueError("Standings list is empty")
 
     standings = []
+
     for team in teams:
         standings.append({
             "position": int(team["overall_league_position"]),
@@ -106,5 +100,9 @@ standings_block = results[0]
         "standings": standings
     }
 
-    CACHE[cache_key] = {"time": now, "data": data}
+    CACHE[cache_key] = {
+        "time": now,
+        "data": data
+    }
+
     return data
