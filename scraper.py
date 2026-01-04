@@ -2,28 +2,48 @@ from playwright.sync_api import sync_playwright
 
 def scrape_standings(url):
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
-        page = browser.new_page()
+        browser = p.chromium.launch(
+            headless=True,
+            args=[
+                "--no-sandbox",
+                "--disable-dev-shm-usage",
+                "--disable-gpu",
+                "--single-process"
+            ]
+        )
 
+        page = browser.new_page(
+            user_agent="Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36"
+        )
+
+        # Load page
         page.goto(url, timeout=60000)
-        page.wait_for_timeout(5000)
 
-        rows = page.query_selector_all("div[data-testid='standings-row']")
+        # Give SofaScore time to render (React app)
+        page.wait_for_timeout(8000)
 
-        standings = []
-        for row in rows:
-            try:
-                position = row.query_selector("div:nth-child(1)").inner_text()
-                team = row.query_selector("a").inner_text()
-                points = row.query_selector("div:last-child").inner_text()
-            except:
-                continue
+        # Try to read page content safely
+        try:
+            body = page.query_selector("body")
+            if not body:
+                browser.close()
+                return {
+                    "status": "error",
+                    "message": "Body not found"
+                }
 
-            standings.append({
-                "position": position.strip(),
-                "team": team.strip(),
-                "points": points.strip()
-            })
+            text = body.inner_text()
 
-        browser.close()
-        return standings
+            browser.close()
+
+            return {
+                "status": "page_loaded",
+                "text_sample": text[:2000]  # first 2000 chars only
+            }
+
+        except Exception as e:
+            browser.close()
+            return {
+                "status": "error",
+                "message": str(e)
+            }
