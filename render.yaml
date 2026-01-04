@@ -3,6 +3,9 @@ services:
     name: sofascore-scraper
     env: python
     plan: free
+    envVars:
+      - key: PLAYWRIGHT_BROWSERS_PATH
+        value: "0"
     buildCommand: |
       pip install -r requirements.txt
       playwright install chromium --with-deps
