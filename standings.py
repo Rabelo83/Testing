@@ -2,88 +2,75 @@ import os
 import time
 import requests
 
-# This matches the variable name you set on Render
-API_KEY = os.getenv("FOOTBALL_API_KEY")
-# Base URL for API-Sports
-BASE_URL = "https://v3.football.api-sports.io/standings"
+# Set this to FOOTBALL_DATA_API_KEY in your Render environment variables
+API_KEY = os.getenv("FOOTBALL_DATA_API_KEY")
+BASE_URL = "https://api.football-data.org/v4/competitions"
 
 CACHE = {}
-CACHE_TTL = 600  # 10 minutes cache to save your 100 daily requests
+CACHE_TTL = 900  # 15 minutes (Free tier is 10 requests/min, so cache is important)
 
-# Official IDs for API-Football
-LEAGUE_MAPPING = {
-    "england": {"id": 39, "name": "Premier League"},
-    "spain": {"id": 140, "name": "La Liga"}
+# Football-Data.org specific league codes
+LEAGUE_CODES = {
+    "england": "PL",   # Premier League
+    "spain": "PD"      # Primera Division (La Liga)
 }
 
 def get_standings(league_key, season=None):
-    if league_key not in LEAGUE_MAPPING:
+    if league_key not in LEAGUE_CODES:
         raise ValueError(f"League '{league_key}' not supported. Use 'england' or 'spain'.")
 
-    # API-Football requires a 4-digit year (e.g., 2024)
-    # If no season is provided, we default to the current year
-    if not season:
-        season = time.strftime("%Y")
-    
-    cache_key = f"{league_key}_{season}"
+    # If no season is provided, football-data.org defaults to the current one
+    cache_key = f"{league_key}_{season or 'current'}"
     now = time.time()
 
     if cache_key in CACHE and now - CACHE[cache_key]["time"] < CACHE_TTL:
         return CACHE[cache_key]["data"]
 
-    league_id = LEAGUE_MAPPING[league_key]["id"]
+    league_code = LEAGUE_CODES[league_key]
+    url = f"{BASE_URL}/{league_code}/standings"
     
-    headers = {
-        'x-apisports-key': API_KEY,
-        'x-rapidapi-host': 'v3.football.api-sports.io'
-    }
+    headers = { 'X-Auth-Token': API_KEY }
+    params = {}
+    if season:
+        params['season'] = season
+
+    response = requests.get(url, headers=headers, params=params, timeout=20)
     
-    params = {
-        'league': league_id,
-        'season': season
+    if response.status_code == 403:
+        raise Exception("Access Denied: Your API key doesn't have access to this league or season.")
+    
+    response.raise_for_status()
+    data = response.json()
+
+    # Football-Data.org structure: data['standings'] is a list of tables (TOTAL, HOME, AWAY)
+    standings_list = data.get("standings", [])
+    if not standings_list:
+        raise ValueError("No standings data found in the response.")
+
+    # We want the 'TOTAL' table
+    total_table = next((s for s in standings_list if s['type'] == 'TOTAL'), standings_list[0])
+    rows = total_table.get("table", [])
+
+    formatted_standings = []
+    for row in rows:
+        formatted_standings.append({
+            "position": row.get("position"),
+            "team": row.get("team", {}).get("name"),
+            "played": row.get("playedGames"),
+            "wins": row.get("won"),
+            "draws": row.get("draw"),
+            "losses": row.get("lost"),
+            "points": row.get("points"),
+            "goal_diff": row.get("goalDifference"),
+            "goals_for": row.get("goalsFor"),
+            "goals_against": row.get("goalsAgainst")
+        })
+
+    result = {
+        "league": data.get("competition", {}).get("name"),
+        "season": data.get("filters", {}).get("season"),
+        "standings": formatted_standings
     }
 
-    try:
-        response = requests.get(BASE_URL, headers=headers, params=params, timeout=20)
-        response.raise_for_status()
-        data = response.json()
-
-        # Check if the API returned errors (like invalid key)
-        if data.get("errors"):
-            raise ValueError(f"API Error: {data['errors']}")
-
-        results = data.get("response", [])
-        if not results:
-            raise ValueError(f"No standings found for {league_key} in season {season}")
-
-        # Extracting the standings list
-        league_data = results[0].get("league", {})
-        # The API returns a list of lists for standings
-        standings_list = league_data.get("standings", [[]])[0]
-
-        formatted_standings = []
-        for row in standings_list:
-            formatted_standings.append({
-                "position": row.get("rank"),
-                "team": row.get("team", {}).get("name"),
-                "played": row.get("all", {}).get("played"),
-                "wins": row.get("all", {}).get("win"),
-                "draws": row.get("all", {}).get("draw"),
-                "losses": row.get("all", {}).get("lose"),
-                "points": row.get("points"),
-                "goal_diff": row.get("goalsDiff"),
-                "form": row.get("form")
-            })
-
-        result = {
-            "league": league_data.get("name"),
-            "country": league_data.get("country"),
-            "season": league_data.get("season"),
-            "standings": formatted_standings
-        }
-
-        CACHE[cache_key] = {"time": now, "data": result}
-        return result
-
-    except Exception as e:
-        raise Exception(f"Failed to process API-Football data: {str(e)}")
+    CACHE[cache_key] = {"time": now, "data": result}
+    return result
