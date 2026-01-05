@@ -2,108 +2,87 @@ import os
 import time
 import requests
 
-# This will now raise an error immediately if you forgot to set it in Render
-API_KEY = os.getenv("ALLSPORTS_API_KEY")
-BASE_URL = "https://apiv2.allsportsapi.com/football"
+# Use 'x-apisports-key' for direct signups or 'x-rapidapi-key' for RapidAPI
+API_KEY = os.getenv("FOOTBALL_API_KEY") 
+BASE_URL = "https://v3.football.api-sports.io/standings"
 
 CACHE = {}
 CACHE_TTL = 300 
 
-LEAGUES = {
-    "england": {
-        "country_id": 44,
-        "league_name": "Premier League"
-    },
-    "spain": {
-        "country_id": 6,
-        "league_name": "La Liga"
-    }
+# Direct IDs for API-Football V3
+LEAGUE_MAPPING = {
+    "england": {"id": 39, "name": "Premier League"},
+    "spain": {"id": 140, "name": "La Liga"}
 }
 
-def get_league_id(country_id, league_name):
-    if not API_KEY:
-        raise ValueError("ALLSPORTS_API_KEY environment variable is not set.")
-
-    params = {
-        "met": "Leagues",
-        "APIkey": API_KEY
-    }
-
-    response = requests.get(BASE_URL, params=params, timeout=20)
-    response.raise_for_status()
-    
-    data = response.json()
-    
-    # Check if API returned an error message instead of results
-    if "error" in data:
-        raise ValueError(f"API Error: {data.get('message', 'Unknown error')}")
-
-    leagues = data.get("result", [])
-
-    if not leagues:
-        raise ValueError("No leagues returned. Check if your API Key is valid and has active permissions.")
-
-    for league in leagues:
-        if league.get("league_name", "").strip().lower() == league_name.lower():
-            return league.get("league_key")
-
-    available = [l.get("league_name") for l in leagues]
-    raise ValueError(f"League '{league_name}' not found in your API plan. Available: {available}")
-
 def get_standings(league_key, season=None):
-    if league_key not in LEAGUES:
-        raise ValueError(f"Unsupported league: {league_key}")
+    if league_key not in LEAGUE_MAPPING:
+        raise ValueError(f"League '{league_key}' not supported.")
 
-    season = season or "current"
+    # API-Football requires a specific year for the season (e.g., 2023)
+    # If not provided, we default to the current year
+    current_year = time.strftime("%Y")
+    season = season or current_year
+    
     cache_key = f"{league_key}_{season}"
     now = time.time()
 
     if cache_key in CACHE and now - CACHE[cache_key]["time"] < CACHE_TTL:
         return CACHE[cache_key]["data"]
 
-    league = LEAGUES[league_key]
-    league_id = get_league_id(league["country_id"], league["league_name"])
-
+    league_id = LEAGUE_MAPPING[league_key]["id"]
+    
+    headers = {
+        'x-apisports-key': API_KEY, # Change to 'x-rapidapi-key' if using RapidAPI
+    }
+    
     params = {
-        "met": "Standings",
-        "leagueId": league_id,
-        "APIkey": API_KEY
+        'league': league_id,
+        'season': season
     }
 
-    if season != "current":
-        params["season"] = season
-
-    response = requests.get(BASE_URL, params=params, timeout=20)
+    response = requests.get(BASE_URL, headers=headers, params=params, timeout=20)
     response.raise_for_status()
+    data = response.json()
 
-    payload = response.json()
-    results = payload.get("result", [])
+    # Check for API-specific errors in the response body
+    if data.get("errors"):
+        error_msg = str(data["errors"])
+        raise ValueError(f"API Error: {error_msg}")
 
+    results = data.get("response", [])
     if not results:
-        raise ValueError(f"No standings returned for league ID {league_id}")
+        raise ValueError(f"No standings found for {league_key} in season {season}.")
 
-    # The API returns standings grouped by stage (e.g. Total, Home, Away)
-    # We want the "Total" standings, which is usually the first block
-    standings_block = results[0]
-    teams = standings_block.get("standings", [])
+    # API-Football nests standings inside: response -> league -> standings (list of groups)
+    league_data = results[0].get("league", {})
+    standings_groups = league_data.get("standings", [])
+    
+    if not standings_groups:
+        raise ValueError("Standings data structure is empty.")
 
-    standings = []
-    for team in teams:
-        standings.append({
-            "position": int(team.get("overall_league_position", 0)),
-            "team": team.get("team_name", "Unknown"),
-            "played": int(team.get("overall_league_payed", 0)),
-            "wins": int(team.get("overall_league_W", 0)),
-            "draws": int(team.get("overall_league_D", 0)),
-            "losses": int(team.get("overall_league_L", 0)),
-            "points": int(team.get("overall_league_PTS", 0))
+    # We take the first group (Total standings)
+    raw_rows = standings_groups[0]
+    
+    formatted_standings = []
+    for row in raw_rows:
+        formatted_standings.append({
+            "position": row.get("rank"),
+            "team": row.get("team", {}).get("name"),
+            "played": row.get("all", {}).get("played"),
+            "wins": row.get("all", {}).get("win"),
+            "draws": row.get("all", {}).get("draw"),
+            "losses": row.get("all", {}).get("lose"),
+            "points": row.get("points"),
+            "goal_diff": row.get("goalsDiff"),
+            "form": row.get("form")
         })
 
-    data = {
-        "league": league["league_name"],
-        "season": season,
-        "standings": standings
+    result = {
+        "league": league_data.get("name"),
+        "season": league_data.get("season"),
+        "standings": formatted_standings
     }
 
-    CACHE[cache_key] = {"time": now, "data": data}
-    return data
+    CACHE[cache_key] = {"time": now, "data": result}
+    return result
