@@ -8,13 +8,13 @@ app = Flask(__name__)
 def home():
     return jsonify({
         "status": "ok",
-        "message": "Football Standings API (England & Spain)"
+        "message": "Football Standings API via API-Football"
     })
 
 @app.route("/standings")
 def standings():
     league = request.args.get("league")
-    season = request.args.get("season")  # optional
+    season = request.args.get("season") # Optional: e.g., 2023
 
     if not league:
         return jsonify({"error": "Missing league parameter"}), 400
@@ -23,10 +23,9 @@ def standings():
         data = get_standings(league.lower(), season)
         return jsonify(data)
     except Exception as e:
-        # Added traceback to help you debug the exact failure point
         return jsonify({
-            "error": "Failed to fetch standings",
-            "details": str(e),
+            "error": "Standings Lookup Failed",
+            "message": str(e),
             "traceback": traceback.format_exc()
         }), 500
 
